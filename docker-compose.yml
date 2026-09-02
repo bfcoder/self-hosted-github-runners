@@ -1,0 +1,31 @@
+services:
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Pin a version here, or leave unset to grab the latest release at build time.
+        RUNNER_VERSION: ${RUNNER_VERSION:-}
+    image: github-runner:local
+    # No container_name / no fixed hostname: both must stay unset so every
+    # replica gets its own hostname, which becomes its unique runner name.
+    restart: always
+    environment:
+      GITHUB_URL: ${GITHUB_URL}
+      GITHUB_PAT: ${GITHUB_PAT}
+      RUNNER_NAME_PREFIX: ${RUNNER_NAME_PREFIX:-docker-runner}
+      RUNNER_LABELS: ${RUNNER_LABELS:-self-hosted,linux,docker}
+      RUNNER_GROUP: ${RUNNER_GROUP:-Default}
+      RUNNER_EPHEMERAL: ${RUNNER_EPHEMERAL:-true}
+    # Lets jobs run `docker build` / service containers on the host daemon.
+    # Drop these two lines if your workflows never touch Docker.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    deploy:
+      replicas: ${RUNNER_REPLICAS:-3}
+    stop_grace_period: 5m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
