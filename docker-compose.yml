@@ -1,31 +1,59 @@
+# Each runner is its own service, because every runner needs its own work
+# directory bind-mounted at a path IDENTICAL inside and outside the container.
+# That path identity is what makes `docker run -v "$GITHUB_WORKSPACE:/src"`
+# inside a job resolve to real files: the flag is interpreted by the HOST
+# daemon, so the path must mean the same thing on the host.
+#
+# To add runner-4: copy a block, bump every "3" to "4". To remove one, delete
+# its block and run `docker compose up -d --remove-orphans`.
+
+x-runner-env: &runner-env
+  GITHUB_URL: ${GITHUB_URL}
+  GITHUB_PAT: ${GITHUB_PAT}
+  RUNNER_NAME_PREFIX: ${RUNNER_NAME_PREFIX:-docker-runner}
+  RUNNER_LABELS: ${RUNNER_LABELS:-self-hosted,linux,docker}
+  RUNNER_GROUP: ${RUNNER_GROUP:-Default}
+  RUNNER_EPHEMERAL: ${RUNNER_EPHEMERAL:-true}
+
+x-runner: &runner
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      RUNNER_VERSION: ${RUNNER_VERSION:-}
+  image: github-runner:local
+  restart: always
+  stop_grace_period: 5m
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
-  runner:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        # Pin a version here, or leave unset to grab the latest release at build time.
-        RUNNER_VERSION: ${RUNNER_VERSION:-}
-    image: github-runner:local
-    # No container_name / no fixed hostname: both must stay unset so every
-    # replica gets its own hostname, which becomes its unique runner name.
-    restart: always
+  runner-1:
+    <<: *runner
     environment:
-      GITHUB_URL: ${GITHUB_URL}
-      GITHUB_PAT: ${GITHUB_PAT}
-      RUNNER_NAME_PREFIX: ${RUNNER_NAME_PREFIX:-docker-runner}
-      RUNNER_LABELS: ${RUNNER_LABELS:-self-hosted,linux,docker}
-      RUNNER_GROUP: ${RUNNER_GROUP:-Default}
-      RUNNER_EPHEMERAL: ${RUNNER_EPHEMERAL:-true}
-    # Lets jobs run `docker build` / service containers on the host daemon.
-    # Drop these two lines if your workflows never touch Docker.
+      <<: *runner-env
+      RUNNER_WORKDIR: ${RUNNER_WORK_ROOT:-/srv/runner-work}/1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    deploy:
-      replicas: ${RUNNER_REPLICAS:-3}
-    stop_grace_period: 5m
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+      - ${RUNNER_WORK_ROOT:-/srv/runner-work}/1:${RUNNER_WORK_ROOT:-/srv/runner-work}/1
+
+  runner-2:
+    <<: *runner
+    environment:
+      <<: *runner-env
+      RUNNER_WORKDIR: ${RUNNER_WORK_ROOT:-/srv/runner-work}/2
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${RUNNER_WORK_ROOT:-/srv/runner-work}/2:${RUNNER_WORK_ROOT:-/srv/runner-work}/2
+
+  runner-3:
+    <<: *runner
+    environment:
+      <<: *runner-env
+      RUNNER_WORKDIR: ${RUNNER_WORK_ROOT:-/srv/runner-work}/3
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${RUNNER_WORK_ROOT:-/srv/runner-work}/3:${RUNNER_WORK_ROOT:-/srv/runner-work}/3

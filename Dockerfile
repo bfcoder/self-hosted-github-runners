@@ -56,6 +56,7 @@ RUN set -eux; \
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
-USER runner
-
+# Deliberately NOT `USER runner`: the entrypoint starts as root only to align the
+# container's group with the host's Docker socket GID, then drops to `runner`
+# via setpriv. The actions runner itself never runs as root.
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
