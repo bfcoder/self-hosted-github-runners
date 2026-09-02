@@ -1,19 +1,31 @@
-# Each runner is its own service, because every runner needs its own work
-# directory bind-mounted at a path IDENTICAL inside and outside the container.
-# That path identity is what makes `docker run -v "$GITHUB_WORKSPACE:/src"`
-# inside a job resolve to real files: the flag is interpreted by the HOST
-# daemon, so the path must mean the same thing on the host.
+# Self-hosted runners that mirror GitHub-hosted ones: each runner is paired with
+# its own Docker daemon, so a job sees the same filesystem layout and the same
+# private daemon it would get on a hosted VM.
 #
-# To add runner-4: copy a block, bump every "3" to "4". To remove one, delete
-# its block and run `docker compose up -d --remove-orphans`.
+#   HOME              /home/runner
+#   work tree         /home/runner/work      (GITHUB_WORKSPACE lives under here)
+#   tool cache        /opt/hostedtoolcache
+#   docker            tcp://dind-N:2375      (one daemon per runner)
+#
+# The runner and its dind share work/, hostedtoolcache/ and externals/ at
+# IDENTICAL paths. That is what makes `docker run -v "$GITHUB_WORKSPACE:/src"`
+# inside a job resolve to real files: the daemon resolves that path itself.
+#
+# To add a 4th runner: copy both the dind-4 and runner-4 blocks plus the four
+# volumes, bumping every "3" to "4".
 
 x-runner-env: &runner-env
   GITHUB_URL: ${GITHUB_URL}
   GITHUB_PAT: ${GITHUB_PAT}
   RUNNER_NAME_PREFIX: ${RUNNER_NAME_PREFIX:-docker-runner}
-  RUNNER_LABELS: ${RUNNER_LABELS:-self-hosted,linux,docker}
+  RUNNER_LABELS: ${RUNNER_LABELS:-self-hosted,linux,x64,docker}
   RUNNER_GROUP: ${RUNNER_GROUP:-Default}
   RUNNER_EPHEMERAL: ${RUNNER_EPHEMERAL:-true}
+  # Hosted runners get a clean VM per job; wipe the work tree to match.
+  FRESH_WORKSPACE: ${FRESH_WORKSPACE:-true}
+  RUNNER_WORKDIR: /home/runner/work
+  AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
+  EXTERNALS_SYNC_DIR: /mnt/externals
 
 x-runner: &runner
   build:
@@ -24,36 +36,134 @@ x-runner: &runner
   image: github-runner:local
   restart: always
   stop_grace_period: 5m
-  logging:
+  logging: &logging
     driver: json-file
     options:
       max-size: "10m"
       max-file: "3"
 
+x-dind: &dind
+  image: ${DIND_IMAGE:-docker:28-dind}
+  # dind cannot create the namespaces it needs without this.
+  privileged: true
+  environment:
+    # Plain TCP on an internal compose network; see the note in .env.
+    DOCKER_TLS_CERTDIR: ""
+  command:
+    - --host=tcp://0.0.0.0:2375
+    - --host=unix:///var/run/docker.sock
+  restart: always
+  stop_grace_period: 30s
+  healthcheck:
+    test: ["CMD", "docker", "info"]
+    interval: 5s
+    timeout: 5s
+    retries: 12
+    start_period: 10s
+  logging: *logging
+
 services:
+  # --- runner 1 -------------------------------------------------------------
+  dind-1:
+    <<: *dind
+    volumes:
+      - work-1:/home/runner/work
+      - tools-1:/opt/hostedtoolcache
+      - externals-1:/actions-runner/externals
+      - dind-data-1:/var/lib/docker
+
   runner-1:
     <<: *runner
+    depends_on:
+      dind-1:
+        condition: service_healthy
     environment:
       <<: *runner-env
-      RUNNER_WORKDIR: ${RUNNER_WORK_ROOT:-/srv/runner-work}/1
+      DOCKER_HOST: tcp://dind-1:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${RUNNER_WORK_ROOT:-/srv/runner-work}/1:${RUNNER_WORK_ROOT:-/srv/runner-work}/1
+      - work-1:/home/runner/work
+      - tools-1:/opt/hostedtoolcache
+      # Mounted off to the side so the image's own copy stays visible; the
+      # entrypoint syncs it in. dind sees it at /actions-runner/externals.
+      - externals-1:/mnt/externals
+
+  # --- runner 2 -------------------------------------------------------------
+  dind-2:
+    <<: *dind
+    volumes:
+      - work-2:/home/runner/work
+      - tools-2:/opt/hostedtoolcache
+      - externals-2:/actions-runner/externals
+      - dind-data-2:/var/lib/docker
 
   runner-2:
     <<: *runner
+    depends_on:
+      dind-2:
+        condition: service_healthy
     environment:
       <<: *runner-env
-      RUNNER_WORKDIR: ${RUNNER_WORK_ROOT:-/srv/runner-work}/2
+      DOCKER_HOST: tcp://dind-2:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${RUNNER_WORK_ROOT:-/srv/runner-work}/2:${RUNNER_WORK_ROOT:-/srv/runner-work}/2
+      - work-2:/home/runner/work
+      - tools-2:/opt/hostedtoolcache
+      - externals-2:/mnt/externals
+
+  # --- runner 3 -------------------------------------------------------------
+  dind-3:
+    <<: *dind
+    volumes:
+      - work-3:/home/runner/work
+      - tools-3:/opt/hostedtoolcache
+      - externals-3:/actions-runner/externals
+      - dind-data-3:/var/lib/docker
 
   runner-3:
     <<: *runner
+    depends_on:
+      dind-3:
+        condition: service_healthy
     environment:
       <<: *runner-env
-      RUNNER_WORKDIR: ${RUNNER_WORK_ROOT:-/srv/runner-work}/3
+      DOCKER_HOST: tcp://dind-3:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${RUNNER_WORK_ROOT:-/srv/runner-work}/3:${RUNNER_WORK_ROOT:-/srv/runner-work}/3
+      - work-3:/home/runner/work
+      - tools-3:/opt/hostedtoolcache
+      - externals-3:/mnt/externals
+
+  # --- weekly prune ---------------------------------------------------------
+  # Reuses the runner image (it has GNU find and the Docker CLI) with a
+  # different entrypoint, so there is no second image to keep in sync.
+  cache-cleanup:
+    <<: *runner
+    entrypoint: ["/bin/bash", "/cleanup.sh"]
+    stop_grace_period: 30s
+    depends_on:
+      dind-1:
+        condition: service_healthy
+    environment:
+      TOOL_CACHE_DIRS: /caches/1,/caches/2,/caches/3
+      DIND_HOSTS: ${DIND_HOSTS:-tcp://dind-1:2375,tcp://dind-2:2375,tcp://dind-3:2375}
+      MAX_AGE_DAYS: ${CACHE_MAX_AGE_DAYS:-14}
+      INTERVAL_SECONDS: ${CACHE_PRUNE_INTERVAL_SECONDS:-604800}
+      DRY_RUN: ${CACHE_PRUNE_DRY_RUN:-false}
+      PRUNE_DOCKER: ${CACHE_PRUNE_DOCKER:-true}
+    volumes:
+      - ./cleanup.sh:/cleanup.sh:ro
+      - tools-1:/caches/1
+      - tools-2:/caches/2
+      - tools-3:/caches/3
+
+volumes:
+  work-1:
+  work-2:
+  work-3:
+  tools-1:
+  tools-2:
+  tools-3:
+  externals-1:
+  externals-2:
+  externals-3:
+  dind-data-1:
+  dind-data-2:
+  dind-data-3:

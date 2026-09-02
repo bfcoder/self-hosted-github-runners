@@ -7,7 +7,8 @@ ARG TARGETARCH=amd64
 
 ENV DEBIAN_FRONTEND=noninteractive \
     RUNNER_MANUALLY_TRAP_SIG=1 \
-    ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=1
+    ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=1 \
+    AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache
 
 # Base tooling + the runner's own dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -28,11 +29,13 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 
 # The runner refuses to run as root, so give it its own user.
 # UID 1001 avoids clashing with ubuntu:24.04's built-in "ubuntu" user (1000).
+# Layout mirrors a GitHub-hosted runner: HOME=/home/runner, work tree at
+# /home/runner/work, tool cache at /opt/hostedtoolcache, uid 1001.
 RUN useradd -m -u 1001 -s /bin/bash runner \
     && echo "runner ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/runner \
     && chmod 0440 /etc/sudoers.d/runner \
-    && mkdir -p /actions-runner /actions-runner/_work \
-    && chown -R runner:runner /actions-runner
+    && mkdir -p /actions-runner /home/runner/work /opt/hostedtoolcache /mnt/externals \
+    && chown -R runner:runner /actions-runner /home/runner /opt/hostedtoolcache /mnt/externals
 
 WORKDIR /actions-runner
 
@@ -52,6 +55,7 @@ RUN set -eux; \
     tar xzf runner.tar.gz; \
     rm runner.tar.gz; \
     ./bin/installdependencies.sh; \
+    echo "${VERSION}" > /actions-runner/.runner-version; \
     chown -R runner:runner /actions-runner
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh

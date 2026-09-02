@@ -2,11 +2,12 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Root phase: a bind-mounted /var/run/docker.sock keeps the HOST's group GID,
-# which usually matches no group in this image, so `runner` gets EACCES. Create
-# a matching group on the fly, then drop privileges and re-exec this script.
+# Root phase. Fixes up ownership of the shared volumes, seeds the externals
+# volume the sibling dockerd needs, then drops to `runner` and re-execs.
 # ---------------------------------------------------------------------------
 if [[ "$(id -u)" -eq 0 ]]; then
+
+  # Only relevant when a host socket is bind-mounted instead of using dind.
   if [[ -S /var/run/docker.sock ]]; then
     SOCK_GID="$(stat -c %g /var/run/docker.sock)"
     if [[ "${SOCK_GID}" -eq 0 ]]; then
@@ -21,10 +22,34 @@ if [[ "$(id -u)" -eq 0 ]]; then
       echo "Granted runner access to docker.sock via group ${SOCK_GROUP} (gid ${SOCK_GID})"
     fi
   fi
-  # The bind-mounted work dir arrives owned by root; hand it to `runner`.
-  ROOT_PHASE_WORKDIR="${RUNNER_WORKDIR:-/actions-runner/_work}"
-  mkdir -p "${ROOT_PHASE_WORKDIR}"
-  chown runner:runner "${ROOT_PHASE_WORKDIR}"
+
+  # Fresh volumes arrive root-owned. Non-recursive: chown -R over a warm tool
+  # cache is slow, and everything inside is created by runner anyway.
+  for d in "${RUNNER_WORKDIR:-/home/runner/work}" \
+           "/home/runner" \
+           "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" \
+           "${EXTERNALS_SYNC_DIR:-}"; do
+    [[ -n "${d}" ]] || continue
+    mkdir -p "${d}"
+    chown runner:runner "${d}"
+  done
+
+  # A `container:` job makes the runner mount /actions-runner/externals into the
+  # job container. That path is resolved by the DAEMON, so the sibling dockerd
+  # needs the same content at the same path. Sync it into the shared volume,
+  # keyed on the runner version so an image upgrade re-seeds it.
+  if [[ -n "${EXTERNALS_SYNC_DIR:-}" && -d /actions-runner/externals ]]; then
+    IMAGE_VERSION="$(cat /actions-runner/.runner-version 2>/dev/null || echo unknown)"
+    VOLUME_VERSION="$(cat "${EXTERNALS_SYNC_DIR}/.runner-version" 2>/dev/null || echo none)"
+    if [[ "${IMAGE_VERSION}" != "${VOLUME_VERSION}" ]]; then
+      echo "Seeding externals for runner ${IMAGE_VERSION} (volume had: ${VOLUME_VERSION})"
+      rm -rf "${EXTERNALS_SYNC_DIR:?}"/*
+      cp -a /actions-runner/externals/. "${EXTERNALS_SYNC_DIR}/"
+      echo "${IMAGE_VERSION}" > "${EXTERNALS_SYNC_DIR}/.runner-version"
+      chown -R runner:runner "${EXTERNALS_SYNC_DIR}"
+      echo "Externals seeded."
+    fi
+  fi
 
   # setpriv swaps the uid but leaves the environment alone, so HOME would stay
   # /root (mode 0700) and every git/node call would EACCES on ~/.gitconfig.
@@ -40,19 +65,46 @@ fi
 RUNNER_NAME="${RUNNER_NAME:-${RUNNER_NAME_PREFIX:-runner}-$(hostname)}"
 RUNNER_LABELS="${RUNNER_LABELS:-self-hosted,docker}"
 RUNNER_GROUP="${RUNNER_GROUP:-Default}"
-RUNNER_WORKDIR="${RUNNER_WORKDIR:-/actions-runner/_work}"
+RUNNER_WORKDIR="${RUNNER_WORKDIR:-/home/runner/work}"
 RUNNER_EPHEMERAL="${RUNNER_EPHEMERAL:-true}"
+FRESH_WORKSPACE="${FRESH_WORKSPACE:-true}"
 
 cd /actions-runner
 
 # ---------------------------------------------------------------------------
-# Obtain a registration token.
-# Either supply RUNNER_TOKEN directly (short-lived, ~1h) or supply GITHUB_PAT
-# and let the container mint one on every start (needed for restarts).
+# A hosted runner gets a brand-new VM per job. Compose restarts the same
+# container, so the work tree would carry over; wipe it to match. _tool is NOT
+# in here (it lives in /opt/hostedtoolcache), so toolchains survive, which is
+# what hosted runners do with their preinstalled tools.
+# ---------------------------------------------------------------------------
+if [[ "${FRESH_WORKSPACE}" == "true" ]]; then
+  if [[ -n "$(ls -A "${RUNNER_WORKDIR}" 2>/dev/null)" ]]; then
+    echo "Clearing work tree ${RUNNER_WORKDIR} (FRESH_WORKSPACE=true)"
+    rm -rf "${RUNNER_WORKDIR:?}"/* "${RUNNER_WORKDIR:?}"/.[!.]* 2>/dev/null || true
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Wait for the sibling dockerd. Without this the first job races the daemon
+# and fails on an image pull for no obvious reason.
+# ---------------------------------------------------------------------------
+if [[ -n "${DOCKER_HOST:-}" ]]; then
+  echo "Waiting for Docker daemon at ${DOCKER_HOST}"
+  for i in $(seq 1 60); do
+    if docker info >/dev/null 2>&1; then
+      echo "Docker daemon ready ($(docker version --format '{{.Server.Version}}' 2>/dev/null))"
+      break
+    fi
+    [[ "${i}" -eq 60 ]] && { echo "ERROR: no Docker daemon at ${DOCKER_HOST} after 60s" >&2; exit 1; }
+    sleep 1
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# Obtain a registration token. Either supply RUNNER_TOKEN directly (short-lived,
+# ~1h) or supply GITHUB_PAT and let the container mint one on every start.
 # ---------------------------------------------------------------------------
 api_scope() {
-  # https://github.com/OWNER            -> orgs/OWNER
-  # https://github.com/OWNER/REPO       -> repos/OWNER/REPO
   local path="${GITHUB_URL#*://}"
   path="${path#*/}"
   path="${path%/}"
@@ -68,8 +120,6 @@ if [[ -z "${RUNNER_TOKEN:-}" ]]; then
   API_BASE="${GITHUB_API_URL:-https://api.github.com}"
   SCOPE="$(api_scope)"
   echo "Requesting registration token from ${API_BASE}/${SCOPE}"
-  HTTP_BODY=""
-  HTTP_CODE=""
   RESPONSE="$(
     curl -sS -w $'\n%{http_code}' -X POST \
       -H "Accept: application/vnd.github+json" \
@@ -92,9 +142,6 @@ if [[ -z "${RUNNER_TOKEN:-}" ]]; then
   [[ -n "${RUNNER_TOKEN}" && "${RUNNER_TOKEN}" != "null" ]] || { echo "ERROR: no token in API response" >&2; exit 1; }
 fi
 
-# ---------------------------------------------------------------------------
-# Configure.
-# ---------------------------------------------------------------------------
 CONFIG_ARGS=(
   --url "${GITHUB_URL}"
   --token "${RUNNER_TOKEN}"
@@ -110,9 +157,6 @@ CONFIG_ARGS=(
 echo "Configuring runner '${RUNNER_NAME}' against ${GITHUB_URL}"
 ./config.sh "${CONFIG_ARGS[@]}"
 
-# ---------------------------------------------------------------------------
-# Deregister cleanly on SIGINT/SIGTERM (docker compose down / stop).
-# ---------------------------------------------------------------------------
 cleanup() {
   echo "Removing runner '${RUNNER_NAME}' from ${GITHUB_URL}"
   ./config.sh remove --token "${RUNNER_TOKEN}" || true
