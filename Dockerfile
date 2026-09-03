@@ -27,6 +27,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxml2-dev libxmlsec1-dev libxmlsec1-openssl libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Database clients. Hosted images ship these; workflows use them to talk to
+# `services:` containers (psql for setup SQL, redis-cli for cache checks).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        postgresql-client redis-tools \
+    && rm -rf /var/lib/apt/lists/*
+
 # Docker CLI + compose plugin, so jobs can talk to a mounted Docker socket.
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \

@@ -204,6 +204,7 @@ eye on `docker system df -v`.
 | `no Docker daemon at tcp://localhost:2375 after 60s` | `dind-N` unhealthy: `docker compose logs dind-N`. Usually the host disallows `privileged` |
 | `Connection refused (os error 111)` reaching a service container on `localhost:<port>` | The runner is not sharing its daemon's netns - check `network_mode: "service:dind-N"` |
 | `openssl-sys` / `pkg-config` build failure | A missing `-dev` package; see *Preinstalled build dependencies* |
+| `psql: command not found` (or any tool, exit 127) | The image lacks a CLI the workflow assumes; hosted images ship far more |
 | `git worktree` / `index.lock`: `Read-only file system` | A job mounts the workspace `:ro` but the tool needs to write to `.git` (e.g. semgrep `--baseline-commit`) |
 | `docker compose down` hangs | A container is ignoring `SIGTERM` and waiting out `stop_grace_period` (5m for runners, 30s elsewhere) |
 
@@ -220,6 +221,15 @@ and native gems fail at *build* time without them:
 `libclang-dev` is there for `bindgen`, which needs `libclang.so` at build time,
 and `libxmlsec1-openssl` because `pkg-config --libs xmlsec1` emits
 `-lxmlsec1-openssl` - the headers alone do not link.
+
+Database clients for talking to `services:` containers:
+
+`postgresql-client` (psql 16) `redis-tools` (redis-cli 7)
+
+`psql` comes from Ubuntu 24.04, so it is version 16. Talking to a newer server
+is fine for `psql` itself, but `pg_dump` refuses a server newer than itself. If
+your `services:` Postgres is 17+ and you dump from it, add the PGDG apt repo to
+the `Dockerfile` and install the matching `postgresql-client-NN`.
 
 A cheap way to fail fast with a clear message, rather than deep inside a cargo
 build, is a preflight step:
