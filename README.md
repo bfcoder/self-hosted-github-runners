@@ -182,13 +182,34 @@ eye on `docker system df -v`.
 | `EACCES … '/root/.gitconfig'` | `HOME` is not being exported before the privilege drop |
 | A job's `-v "$GITHUB_WORKSPACE:/src"` sees an empty directory | The path is not shared with the daemon at the same path. Green checks here are *false passes* — a scanner reports zero findings on zero files |
 | `no Docker daemon at tcp://dind-N:2375 after 60s` | `dind-N` unhealthy: `docker compose logs dind-N`. Usually the host disallows `privileged` |
+| `openssl-sys` / `pkg-config` build failure | A missing `-dev` package; see *Preinstalled build dependencies* |
+| `git worktree` / `index.lock`: `Read-only file system` | A job mounts the workspace `:ro` but the tool needs to write to `.git` (e.g. semgrep `--baseline-commit`) |
 | `docker compose down` hangs | A container is ignoring `SIGTERM` and waiting out `stop_grace_period` (5m for runners, 30s elsewhere) |
+
+## Preinstalled build dependencies
+
+Hosted runner images ship a large set of `-dev` packages that native extensions
+assume are present. This image carries the common ones, because `-sys` crates
+and native gems fail at *build* time without them:
+
+`pkg-config` `libssl-dev` `cmake` `clang` `llvm` `libsqlite3-dev` `libpq-dev`
+`zlib1g-dev` `build-essential`
+
+If a build fails with "could not find directory of OpenSSL installation", "The
+pkg-config command could not be found", or a missing header, the fix is another
+`-dev` package in the `Dockerfile` rather than anything in the runner config.
 
 ## Known deviations from hosted runners
 
 - **No preinstalled toolchains.** Hosted images ship dozens of language
   versions; here `setup-node`, `setup-python` and friends download on first use
   and are then cached in `/opt/hostedtoolcache`, which persists.
+- **Fewer preinstalled system packages** than a hosted image, despite the list
+  above. Expect to add a `-dev` package now and then.
+- **`cargo install` compiles from source every time it runs.** `~/.cargo` lives
+  in the container layer, so it survives a restart but not a rebuild. Prefer a
+  prebuilt binary (`taiki-e/install-action`, `cargo-binstall`) or bake the tool
+  into the image.
 - **Layer cache is per runner**, not shared, so the same base image is pulled
   once per runner rather than once per host.
 - **`dind-data-N` persists** across restarts. Strict fidelity would discard it,
