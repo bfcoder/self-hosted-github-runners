@@ -17,6 +17,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libicu74 liblttng-ust1 libkrb5-3 zlib1g libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
+# Native build dependencies. Hosted runner images ship these, and -sys crates
+# (openssl-sys, libsqlite3-sys, pq-sys) fail at build time without them:
+# openssl-sys shells out to pkg-config and cannot proceed if it is missing.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config libssl-dev \
+        cmake clang llvm \
+        libsqlite3-dev libpq-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Docker CLI + compose plugin, so jobs can talk to a mounted Docker socket.
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
