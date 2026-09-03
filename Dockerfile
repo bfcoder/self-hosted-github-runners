@@ -22,8 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # openssl-sys shells out to pkg-config and cannot proceed if it is missing.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config libssl-dev \
-        cmake clang llvm \
+        cmake clang llvm libclang-dev \
         libsqlite3-dev libpq-dev zlib1g-dev \
+        libxml2-dev libxmlsec1-dev libxmlsec1-openssl libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI + compose plugin, so jobs can talk to a mounted Docker socket.

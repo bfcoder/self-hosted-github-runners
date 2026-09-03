@@ -213,8 +213,24 @@ Hosted runner images ship a large set of `-dev` packages that native extensions
 assume are present. This image carries the common ones, because `-sys` crates
 and native gems fail at *build* time without them:
 
-`pkg-config` `libssl-dev` `cmake` `clang` `llvm` `libsqlite3-dev` `libpq-dev`
-`zlib1g-dev` `build-essential`
+`build-essential` `pkg-config` `cmake` `clang` `llvm` `libclang-dev`
+`libssl-dev` `libsqlite3-dev` `libpq-dev` `zlib1g-dev` `libxml2-dev`
+`libxmlsec1-dev` `libxmlsec1-openssl` `libxslt1-dev`
+
+`libclang-dev` is there for `bindgen`, which needs `libclang.so` at build time,
+and `libxmlsec1-openssl` because `pkg-config --libs xmlsec1` emits
+`-lxmlsec1-openssl` - the headers alone do not link.
+
+A cheap way to fail fast with a clear message, rather than deep inside a cargo
+build, is a preflight step:
+
+```yaml
+- run: |
+    for lib in libxml-2.0 xmlsec1 openssl; do
+      pkg-config --exists "$lib" || {
+        echo "::error::runner image missing pkg-config module $lib"; exit 1; }
+    done
+```
 
 If a build fails with "could not find directory of OpenSSL installation", "The
 pkg-config command could not be found", or a missing header, the fix is another
