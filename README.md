@@ -16,6 +16,7 @@ and restarts with a clean work tree.
 | Runner user | `runner`, uid 1001 | `runner`, uid 1001 |
 | Docker | private daemon per VM | private `dind-N` per runner |
 | Per job | fresh VM | work tree wiped at container start |
+| Service containers | `localhost:<port>` | same (runner shares its daemon's netns) |
 | `actions/cache` | GitHub cache service | same (network service, unchanged) |
 
 Because each runner has its own daemon, `docker run -v "$GITHUB_WORKSPACE:/src"`
@@ -67,7 +68,7 @@ jobs:
 |---|---|---|
 | `GITHUB_URL` | — | `https://github.com/ORG` or `https://github.com/ORG/REPO` |
 | `GITHUB_PAT` | — | Used to mint a fresh registration token on every container start |
-| `RUNNER_NAME_PREFIX` | `docker-runner` | Each runner is `<prefix>-<container hostname>` |
+| `RUNNER_NAME_PREFIX` | `docker-runner` | Runners are named `<prefix>-1`, `<prefix>-2`, … |
 | `RUNNER_LABELS` | `self-hosted,linux,x64,docker` | Must match `runs-on:` |
 | `RUNNER_GROUP` | `Default` | Org runner groups only |
 | `RUNNER_EPHEMERAL` | `true` | One job per container. `false` = long-lived runner |
@@ -105,6 +106,24 @@ Instead the volume is mounted at `/mnt/externals` in the runner, at
 `/actions-runner/externals` in dind, and the entrypoint syncs image → volume
 whenever `.runner-version` differs.
 
+### Why each runner shares its daemon's network namespace
+
+A job's `services:` containers are created by the daemon and their ports are
+published into *its* network namespace. If the runner had its own namespace,
+`DATABASE_URL=postgres://...@localhost:32768/...` would be refused, because
+nothing is listening on the runner's own localhost. `network_mode:
+"service:dind-N"` puts the runner in its daemon's namespace, which is the
+arrangement a hosted runner (and an ARC pod) has.
+
+Two consequences:
+
+- The runner inherits dind's hostname, so `RUNNER_NAME` is set explicitly per
+  service (`docker-runner-1`, `-2`, `-3`) instead of being derived from
+  `$(hostname)`.
+- **Recreating a `dind-N` requires recreating its `runner-N`**, since the
+  namespace it joined disappears. `docker compose up -d` handles this; a bare
+  `docker compose restart dind-1` does not.
+
 ## Operations
 
 **Logs**
@@ -116,7 +135,8 @@ docker compose logs -f cache-cleanup     # prune activity
 
 **Add a fourth runner**
 
-1. Copy the `dind-3` and `runner-3` service blocks, bumping every `3` to `4`.
+1. Copy the `dind-3` and `runner-3` service blocks, bumping every `3` to `4` -
+   including `network_mode: "service:dind-4"` and `RUNNER_NAME`.
 2. Add `work-4`, `tools-4`, `externals-4`, `dind-data-4` to the `volumes:` block.
 3. In `cache-cleanup`: add `tools-4:/caches/4` to its volumes and `/caches/4` to
    `TOOL_CACHE_DIRS`.
@@ -181,7 +201,8 @@ eye on `docker system df -v`.
 | Containers restart in a loop with no logs | Something is failing in the root phase — trace it with `docker compose run --rm --entrypoint bash runner-1 -x /usr/local/bin/entrypoint.sh` |
 | `EACCES … '/root/.gitconfig'` | `HOME` is not being exported before the privilege drop |
 | A job's `-v "$GITHUB_WORKSPACE:/src"` sees an empty directory | The path is not shared with the daemon at the same path. Green checks here are *false passes* — a scanner reports zero findings on zero files |
-| `no Docker daemon at tcp://dind-N:2375 after 60s` | `dind-N` unhealthy: `docker compose logs dind-N`. Usually the host disallows `privileged` |
+| `no Docker daemon at tcp://localhost:2375 after 60s` | `dind-N` unhealthy: `docker compose logs dind-N`. Usually the host disallows `privileged` |
+| `Connection refused (os error 111)` reaching a service container on `localhost:<port>` | The runner is not sharing its daemon's netns - check `network_mode: "service:dind-N"` |
 | `openssl-sys` / `pkg-config` build failure | A missing `-dev` package; see *Preinstalled build dependencies* |
 | `git worktree` / `index.lock`: `Read-only file system` | A job mounts the workspace `:ro` but the tool needs to write to `.git` (e.g. semgrep `--baseline-commit`) |
 | `docker compose down` hangs | A container is ignoring `SIGTERM` and waiting out `stop_grace_period` (5m for runners, 30s elsewhere) |

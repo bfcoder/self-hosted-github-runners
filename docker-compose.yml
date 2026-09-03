@@ -74,12 +74,20 @@ services:
 
   runner-1:
     <<: *runner
+    # Share dind-1's network namespace. A job's service containers are
+    # published by that daemon, so their ports only exist on ITS localhost;
+    # without this, DATABASE_URL=localhost:<port> is refused. Hosted runners
+    # work because the daemon and the steps share one namespace.
+    network_mode: "service:dind-1"
     depends_on:
       dind-1:
         condition: service_healthy
     environment:
       <<: *runner-env
-      DOCKER_HOST: tcp://dind-1:2375
+      DOCKER_HOST: tcp://localhost:2375
+      # Set explicitly: sharing dind's netns means $(hostname) returns
+      # dind's id, not this container's, so the default would be opaque.
+      RUNNER_NAME: ${RUNNER_NAME_PREFIX:-docker-runner}-1
     volumes:
       - work-1:/home/runner/work
       - tools-1:/opt/hostedtoolcache
@@ -98,12 +106,20 @@ services:
 
   runner-2:
     <<: *runner
+    # Share dind-2's network namespace. A job's service containers are
+    # published by that daemon, so their ports only exist on ITS localhost;
+    # without this, DATABASE_URL=localhost:<port> is refused. Hosted runners
+    # work because the daemon and the steps share one namespace.
+    network_mode: "service:dind-2"
     depends_on:
       dind-2:
         condition: service_healthy
     environment:
       <<: *runner-env
-      DOCKER_HOST: tcp://dind-2:2375
+      DOCKER_HOST: tcp://localhost:2375
+      # Set explicitly: sharing dind's netns means $(hostname) returns
+      # dind's id, not this container's, so the default would be opaque.
+      RUNNER_NAME: ${RUNNER_NAME_PREFIX:-docker-runner}-2
     volumes:
       - work-2:/home/runner/work
       - tools-2:/opt/hostedtoolcache
@@ -120,12 +136,20 @@ services:
 
   runner-3:
     <<: *runner
+    # Share dind-3's network namespace. A job's service containers are
+    # published by that daemon, so their ports only exist on ITS localhost;
+    # without this, DATABASE_URL=localhost:<port> is refused. Hosted runners
+    # work because the daemon and the steps share one namespace.
+    network_mode: "service:dind-3"
     depends_on:
       dind-3:
         condition: service_healthy
     environment:
       <<: *runner-env
-      DOCKER_HOST: tcp://dind-3:2375
+      DOCKER_HOST: tcp://localhost:2375
+      # Set explicitly: sharing dind's netns means $(hostname) returns
+      # dind's id, not this container's, so the default would be opaque.
+      RUNNER_NAME: ${RUNNER_NAME_PREFIX:-docker-runner}-3
     volumes:
       - work-3:/home/runner/work
       - tools-3:/opt/hostedtoolcache
