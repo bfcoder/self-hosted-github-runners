@@ -57,7 +57,7 @@ jobs:
 |---|---|
 | `Dockerfile` | Runner image: Ubuntu 24.04, `actions/runner`, Docker CLI, hosted-style layout |
 | `entrypoint.sh` | Registers the runner, waits for its daemon, drops root, deregisters on exit |
-| `docker-compose.yml` | Three `runner-N` + `dind-N` pairs, plus the weekly prune |
+| `docker-compose.yml` | Five `runner-N` + `dind-N` pairs, plus the weekly prune |
 | `cleanup.sh` | Age-based prune of tool caches and each daemon's image store |
 | `.env` | Your configuration (gitignored — it holds the PAT) |
 | `.env.example` | Template |
@@ -133,15 +133,18 @@ docker compose logs -f runner-1          # one runner
 docker compose logs -f cache-cleanup     # prune activity
 ```
 
-**Add a fourth runner**
+**Add another runner** (the stack ships with five, `runner-1` … `runner-5`)
 
-1. Copy the `dind-3` and `runner-3` service blocks, bumping every `3` to `4` -
-   including `network_mode: "service:dind-4"` and `RUNNER_NAME`.
-2. Add `work-4`, `tools-4`, `externals-4`, `dind-data-4` to the `volumes:` block.
-3. In `cache-cleanup`: add `tools-4:/caches/4` to its volumes and `/caches/4` to
+1. Copy the `dind-5` and `runner-5` service blocks, bumping every `5` to `6` -
+   including `network_mode: "service:dind-6"` and `RUNNER_NAME`.
+2. Add `work-6`, `tools-6`, `externals-6`, `dind-data-6` to the `volumes:` block.
+3. In `cache-cleanup`: add `tools-6:/caches/6` to its volumes and `/caches/6` to
    `TOOL_CACHE_DIRS`.
-4. Append `tcp://dind-4:2375` to `DIND_HOSTS` in `.env`.
+4. Append `tcp://dind-6:2375` to `DIND_HOSTS` in `.env`.
 5. `docker compose up -d`
+
+Each runner costs roughly 600 MB of externals plus its own image store, so plan
+disk before scaling much further.
 
 **Upgrade the runner** — `docker compose build --no-cache && docker compose up -d`.
 The externals volume re-seeds automatically on the version change.

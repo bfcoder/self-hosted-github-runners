@@ -11,8 +11,9 @@
 # IDENTICAL paths. That is what makes `docker run -v "$GITHUB_WORKSPACE:/src"`
 # inside a job resolve to real files: the daemon resolves that path itself.
 #
-# To add a 4th runner: copy both the dind-4 and runner-4 blocks plus the four
-# volumes, bumping every "3" to "4".
+# Five runners. To add a 6th: copy both the dind-5 and runner-5 blocks plus the
+# four volumes, bumping every "5" to "6", and add it to the cache-cleanup
+# service's TOOL_CACHE_DIRS, volumes and DIND_HOSTS.
 
 x-runner-env: &runner-env
   GITHUB_URL: ${GITHUB_URL}
@@ -155,6 +156,66 @@ services:
       - tools-3:/opt/hostedtoolcache
       - externals-3:/mnt/externals
 
+  # --- runner 4 -------------------------------------------------------------
+  dind-4:
+    <<: *dind
+    volumes:
+      - work-4:/home/runner/work
+      - tools-4:/opt/hostedtoolcache
+      - externals-4:/actions-runner/externals
+      - dind-data-4:/var/lib/docker
+
+  runner-4:
+    <<: *runner
+    # Share dind-4's network namespace. A job's service containers are
+    # published by that daemon, so their ports only exist on ITS localhost;
+    # without this, DATABASE_URL=localhost:<port> is refused. Hosted runners
+    # work because the daemon and the steps share one namespace.
+    network_mode: "service:dind-4"
+    depends_on:
+      dind-4:
+        condition: service_healthy
+    environment:
+      <<: *runner-env
+      DOCKER_HOST: tcp://localhost:2375
+      # Set explicitly: sharing dind's netns means $(hostname) returns
+      # dind's id, not this container's, so the default would be opaque.
+      RUNNER_NAME: ${RUNNER_NAME_PREFIX:-docker-runner}-4
+    volumes:
+      - work-4:/home/runner/work
+      - tools-4:/opt/hostedtoolcache
+      - externals-4:/mnt/externals
+
+  # --- runner 5 -------------------------------------------------------------
+  dind-5:
+    <<: *dind
+    volumes:
+      - work-5:/home/runner/work
+      - tools-5:/opt/hostedtoolcache
+      - externals-5:/actions-runner/externals
+      - dind-data-5:/var/lib/docker
+
+  runner-5:
+    <<: *runner
+    # Share dind-5's network namespace. A job's service containers are
+    # published by that daemon, so their ports only exist on ITS localhost;
+    # without this, DATABASE_URL=localhost:<port> is refused. Hosted runners
+    # work because the daemon and the steps share one namespace.
+    network_mode: "service:dind-5"
+    depends_on:
+      dind-5:
+        condition: service_healthy
+    environment:
+      <<: *runner-env
+      DOCKER_HOST: tcp://localhost:2375
+      # Set explicitly: sharing dind's netns means $(hostname) returns
+      # dind's id, not this container's, so the default would be opaque.
+      RUNNER_NAME: ${RUNNER_NAME_PREFIX:-docker-runner}-5
+    volumes:
+      - work-5:/home/runner/work
+      - tools-5:/opt/hostedtoolcache
+      - externals-5:/mnt/externals
+
   # --- weekly prune ---------------------------------------------------------
   # Reuses the runner image (it has GNU find and the Docker CLI) with a
   # different entrypoint, so there is no second image to keep in sync.
@@ -166,8 +227,8 @@ services:
       dind-1:
         condition: service_healthy
     environment:
-      TOOL_CACHE_DIRS: /caches/1,/caches/2,/caches/3
-      DIND_HOSTS: ${DIND_HOSTS:-tcp://dind-1:2375,tcp://dind-2:2375,tcp://dind-3:2375}
+      TOOL_CACHE_DIRS: /caches/1,/caches/2,/caches/3,/caches/4,/caches/5
+      DIND_HOSTS: ${DIND_HOSTS:-tcp://dind-1:2375,tcp://dind-2:2375,tcp://dind-3:2375,tcp://dind-4:2375,tcp://dind-5:2375}
       MAX_AGE_DAYS: ${CACHE_MAX_AGE_DAYS:-14}
       INTERVAL_SECONDS: ${CACHE_PRUNE_INTERVAL_SECONDS:-604800}
       DRY_RUN: ${CACHE_PRUNE_DRY_RUN:-false}
@@ -177,17 +238,27 @@ services:
       - tools-1:/caches/1
       - tools-2:/caches/2
       - tools-3:/caches/3
+      - tools-4:/caches/4
+      - tools-5:/caches/5
 
 volumes:
   work-1:
   work-2:
   work-3:
+  work-4:
+  work-5:
   tools-1:
   tools-2:
   tools-3:
+  tools-4:
+  tools-5:
   externals-1:
   externals-2:
   externals-3:
+  externals-4:
+  externals-5:
   dind-data-1:
   dind-data-2:
   dind-data-3:
+  dind-data-4:
+  dind-data-5:
