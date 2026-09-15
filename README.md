@@ -181,6 +181,25 @@ Everything is age-based, so a running job's working set is never a candidate.
 Do a `CACHE_PRUNE_DRY_RUN=true` pass before trusting the threshold, and keep an
 eye on `docker system df -v`.
 
+## Resource limits
+
+Each runner is capped at `RUNNER_CPUS` / `RUNNER_MEMORY` (default 4 vCPU / 16
+GB, matching a GitHub-hosted runner). Without a cap a container sees the whole
+host, so build tools size their parallelism to the entire machine in every
+runner at once - on a 32-core box that is `cargo -j32` five times over, which
+exhausts RAM and gets build processes killed.
+
+Memory is a **hard cap per runner**: `runner count x RUNNER_MEMORY` should fit
+in host RAM with headroom, or the kernel kills build processes under load. Five
+runners at the 16 GB default wants 80 GB if they are all busy. Size the limits
+to the host, or run fewer runners.
+
+**Cargo follows the CPU limit automatically** - Rust's `available_parallelism`
+honours the cgroup quota. But `nproc` does **not**: it reports host cores
+regardless. A step that runs `make -j$(nproc)` or `cargo test -j $(nproc)` will
+still fan out to the whole machine, so set `CARGO_BUILD_JOBS` or pass an
+explicit `-j` in those workflows.
+
 ## Security
 
 - **Each `dind-N` is `privileged`.** Docker-in-Docker cannot create its
@@ -208,6 +227,7 @@ eye on `docker system df -v`.
 | `Connection refused (os error 111)` reaching a service container on `localhost:<port>` | The runner is not sharing its daemon's netns - check `network_mode: "service:dind-N"` |
 | `openssl-sys` / `pkg-config` build failure | A missing `-dev` package; see *Preinstalled build dependencies* |
 | `psql: command not found` (or any tool, exit 127) | The image lacks a CLI the workflow assumes; hosted images ship far more |
+| A compiler exits non-zero with **no error diagnostic**, often with `sccache: the server looks like it shut down unexpectedly` | Out of memory - processes killed by the kernel, not a code failure. Check `dmesg -T \| grep -i oom` and see *Resource limits* |
 | `git worktree` / `index.lock`: `Read-only file system` | A job mounts the workspace `:ro` but the tool needs to write to `.git` (e.g. semgrep `--baseline-commit`) |
 | `docker compose down` hangs | A container is ignoring `SIGTERM` and waiting out `stop_grace_period` (5m for runners, 30s elsewhere) |
 

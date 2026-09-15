@@ -37,6 +37,18 @@ x-runner: &runner
   image: github-runner:local
   restart: always
   stop_grace_period: 5m
+  # Without limits a container sees every host core and all host RAM, so cargo
+  # (and make, ninja, jest...) size their parallelism to the whole machine - in
+  # EVERY runner at once. A hosted runner is 4 vCPU / 16 GB; matching that keeps
+  # builds sized the way workflows expect. Rust's available_parallelism honours
+  # the cgroup CPU quota, so cargo's default -j follows this automatically.
+  # NOTE: memory is a hard cap per runner. RUNNER_COUNT x RUNNER_MEMORY should
+  # fit in host RAM with headroom, or the kernel starts killing build processes.
+  deploy:
+    resources:
+      limits:
+        cpus: "${RUNNER_CPUS:-4}"
+        memory: ${RUNNER_MEMORY:-16g}
   logging: &logging
     driver: json-file
     options:
