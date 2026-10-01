@@ -115,10 +115,72 @@ api_scope() {
   fi
 }
 
+API_BASE="${GITHUB_API_URL:-https://api.github.com}"
+SCOPE="$(api_scope)"
+
+# Results go in the globals GH_STATUS / GH_BODY rather than stdout: calling
+# this in $( ) would run it in a subshell, where any status it set would be
+# lost the moment the substitution closed.
+GH_STATUS=000
+GH_BODY=""
+github_api() {
+  local method="$1" path="$2" response
+  response="$(
+    curl -sS -w $'\n%{http_code}' -X "${method}" \
+      -H "Accept: application/vnd.github+json" \
+      -H "Authorization: Bearer ${GITHUB_PAT}" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "${API_BASE}/${path}" 2>&1
+  )" || { GH_STATUS=000; GH_BODY="${response}"; return 0; }
+  GH_STATUS="$(tail -n1 <<<"${response}")"
+  GH_BODY="$(sed '$d' <<<"${response}")"
+}
+
+# ---------------------------------------------------------------------------
+# Clear a stale registration left by an unclean shutdown (VM reboot, SIGKILL,
+# a failed deregistration). /actions-runner lives in the container layer, so a
+# restart finds the old .runner and config.sh refuses BEFORE it ever contacts
+# GitHub: "Cannot configure the runner because it is already configured."
+# --replace never gets a chance. `remove --local` needs no token or network.
+# ---------------------------------------------------------------------------
+if [[ -f .runner ]]; then
+  echo "Found a stale runner configuration; clearing it"
+  ./config.sh remove --local || rm -f .runner .credentials .credentials_rsaparams
+fi
+
+# ---------------------------------------------------------------------------
+# Drop any leftover registration of this name on GitHub. --replace handles the
+# common case, but a runner GitHub still believes is online can reject it, and
+# then the container restart-loops until someone deletes it in the web UI.
+# ---------------------------------------------------------------------------
+delete_stale_remote_runner() {
+  [[ -n "${GITHUB_PAT:-}" ]] || return 0
+  local page=1 id=""
+  while [[ "${page}" -le 10 ]]; do
+    github_api GET "${SCOPE}/actions/runners?per_page=100&page=${page}"
+    if [[ "${GH_STATUS}" != "200" ]]; then
+      echo "  (could not list runners: HTTP ${GH_STATUS}; continuing)"
+      return 0
+    fi
+    [[ "$(jq -r '.runners | length' <<<"${GH_BODY}" 2>/dev/null || echo 0)" -gt 0 ]] || break
+    id="$(jq -r --arg n "${RUNNER_NAME}" '.runners[] | select(.name==$n) | .id' <<<"${GH_BODY}" 2>/dev/null | head -1)"
+    [[ -n "${id}" ]] && break
+    page=$((page + 1))
+  done
+  if [[ -n "${id}" ]]; then
+    echo "Deleting leftover GitHub registration '${RUNNER_NAME}' (id ${id})"
+    github_api DELETE "${SCOPE}/actions/runners/${id}"
+    if [[ "${GH_STATUS}" == "204" ]]; then
+      echo "  deleted"
+    else
+      echo "  delete returned HTTP ${GH_STATUS}; --replace will be tried"
+    fi
+  fi
+}
+delete_stale_remote_runner
+
 if [[ -z "${RUNNER_TOKEN:-}" ]]; then
   : "${GITHUB_PAT:?Set RUNNER_TOKEN or GITHUB_PAT}"
-  API_BASE="${GITHUB_API_URL:-https://api.github.com}"
-  SCOPE="$(api_scope)"
   echo "Requesting registration token from ${API_BASE}/${SCOPE}"
   RESPONSE="$(
     curl -sS -w $'\n%{http_code}' -X POST \
@@ -157,9 +219,22 @@ CONFIG_ARGS=(
 echo "Configuring runner '${RUNNER_NAME}' against ${GITHUB_URL}"
 ./config.sh "${CONFIG_ARGS[@]}"
 
+# `config.sh remove` wants a REMOVE token, which is a different endpoint from
+# the registration token; passing the latter fails. Fall back to --local so the
+# next start is never blocked by leftover config even if the API is unreachable
+# (which is exactly the case during a host shutdown).
 cleanup() {
   echo "Removing runner '${RUNNER_NAME}' from ${GITHUB_URL}"
-  ./config.sh remove --token "${RUNNER_TOKEN}" || true
+  local remove_token=""
+  if [[ -n "${GITHUB_PAT:-}" ]]; then
+    github_api POST "${SCOPE}/actions/runners/remove-token"
+    [[ "${GH_STATUS}" == "201" ]] && remove_token="$(jq -r '.token // empty' <<<"${GH_BODY}" 2>/dev/null || true)"
+  fi
+  if [[ -n "${remove_token}" ]]; then
+    ./config.sh remove --token "${remove_token}" || ./config.sh remove --local || true
+  else
+    ./config.sh remove --local || true
+  fi
 }
 trap 'cleanup; exit 0' INT TERM
 

@@ -1,2 +1,5 @@
-# Contains a GitHub PAT - never commit.
+# Credentials - never commit.
 .env
+.env.*
+!.env.example
+env*

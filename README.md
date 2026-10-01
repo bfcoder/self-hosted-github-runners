@@ -93,8 +93,29 @@ not survive a restart.
 2. Wipes the work tree if `FRESH_WORKSPACE=true`.
 3. Waits for `dind-N` to answer (up to 60s), so the first job cannot race the
    daemon on an image pull.
-4. Mints a registration token, registers with `--ephemeral --replace`, runs.
+4. Clears any stale registration (see below), drops a leftover GitHub
+   registration of the same name, then mints a registration token and
+   registers with `--ephemeral --replace`.
 5. On job completion or `SIGTERM`, deregisters so no offline runners linger.
+
+### Surviving an unclean shutdown
+
+`/actions-runner` is in the container layer, so a `.runner` written at
+registration outlives a host reboot or a `SIGKILL` - any stop where the
+deregistration trap does not run. On the next start `config.sh` refuses
+**before it contacts GitHub at all**:
+
+```
+Cannot configure the runner because it is already configured.
+To reconfigure the runner, run './config.sh remove' first.
+```
+
+`--replace` never gets a chance, and the container restart-loops. The
+entrypoint now runs `config.sh remove --local` first, which clears the local
+files without needing a token or network, and then deletes any registration of
+the same name through the API before registering. Deregistration uses a token
+from the `remove-token` endpoint - a registration token is a *different*
+endpoint and `config.sh remove` rejects it.
 
 ### Why `externals` is mounted twice
 
@@ -229,6 +250,7 @@ explicit `-j` in those workflows.
 | `psql: command not found` (or any tool, exit 127) | The image lacks a CLI the workflow assumes; hosted images ship far more |
 | A compiler exits non-zero with **no error diagnostic**, often with `sccache: the server looks like it shut down unexpectedly` | Out of memory - processes killed by the kernel, not a code failure. Check `dmesg -T \| grep -i oom` and see *Resource limits* |
 | `git worktree` / `index.lock`: `Read-only file system` | A job mounts the workspace `:ro` but the tool needs to write to `.git` (e.g. semgrep `--baseline-commit`) |
+| After a host reboot, runners restart-loop until you delete them in the GitHub web UI | A stale `.runner` from the unclean shutdown; see *Surviving an unclean shutdown* |
 | `docker compose down` hangs | A container is ignoring `SIGTERM` and waiting out `stop_grace_period` (5m for runners, 30s elsewhere) |
 
 ## Preinstalled build dependencies
