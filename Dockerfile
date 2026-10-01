@@ -33,6 +33,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         postgresql-client redis-tools \
     && rm -rf /var/lib/apt/lists/*
 
+# Python. Hosted images ship it, and plenty of actions and helper scripts
+# assume `python3` exists. venv is included because Ubuntu 24.04 marks the
+# system interpreter externally-managed (PEP 668), so `pip install` outside a
+# virtualenv refuses to run.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
 # Docker CLI + compose plugin, so jobs can talk to a mounted Docker socket.
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \

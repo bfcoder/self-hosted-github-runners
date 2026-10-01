@@ -271,6 +271,15 @@ Database clients for talking to `services:` containers:
 
 `postgresql-client` (psql 16) `redis-tools` (redis-cli 7)
 
+Scripting:
+
+`python3` (3.12) `python3-pip` `python3-venv`
+
+Ubuntu 24.04 marks the system interpreter externally managed, so a bare
+`pip3 install X` fails with `error: externally-managed-environment`. Use a
+virtualenv, `pip install --user`, or `setup-python`, which brings its own
+interpreter into `/opt/hostedtoolcache`.
+
 `psql` comes from Ubuntu 24.04, so it is version 16. Talking to a newer server
 is fine for `psql` itself, but `pg_dump` refuses a server newer than itself. If
 your `services:` Postgres is 17+ and you dump from it, add the PGDG apt repo to
