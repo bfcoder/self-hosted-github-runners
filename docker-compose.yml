@@ -27,6 +27,9 @@ x-runner-env: &runner-env
   RUNNER_WORKDIR: /home/runner/work
   AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
   EXTERNALS_SYNC_DIR: /mnt/externals
+  # Records memory use and kernel OOM kills for the life of each job.
+  MEM_SAMPLE: ${MEM_SAMPLE:-true}
+  MEM_SAMPLE_INTERVAL: ${MEM_SAMPLE_INTERVAL:-5}
 
 x-runner: &runner
   build:

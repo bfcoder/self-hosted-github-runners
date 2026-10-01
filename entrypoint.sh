@@ -224,6 +224,12 @@ echo "Configuring runner '${RUNNER_NAME}' against ${GITHUB_URL}"
 # next start is never blocked by leftover config even if the API is unreachable
 # (which is exactly the case during a host shutdown).
 cleanup() {
+  # Stop the sampler first so its summary prints before deregistration noise.
+  if [[ -n "${SAMPLER_PID:-}" ]]; then
+    kill -TERM "${SAMPLER_PID}" 2>/dev/null || true
+    wait "${SAMPLER_PID}" 2>/dev/null || true
+    SAMPLER_PID=""
+  fi
   echo "Removing runner '${RUNNER_NAME}' from ${GITHUB_URL}"
   local remove_token=""
   if [[ -n "${GITHUB_PAT:-}" ]]; then
@@ -237,6 +243,15 @@ cleanup() {
   fi
 }
 trap 'cleanup; exit 0' INT TERM
+
+# A compiler killed by the kernel reports no error of its own - sccache turns
+# SIGKILL into a bare exit code 2 - so record memory and oom_kill events for the
+# life of the job. Output lands in `docker compose logs`.
+SAMPLER_PID=""
+if [[ "${MEM_SAMPLE:-true}" == "true" ]]; then
+  /usr/local/bin/memsampler.sh &
+  SAMPLER_PID=$!
+fi
 
 ./run.sh &
 RUNNER_PID=$!

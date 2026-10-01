@@ -101,6 +101,7 @@ RUN set -eux; \
     chown -R runner:runner /actions-runner
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 memsampler.sh /usr/local/bin/memsampler.sh
 
 # Deliberately NOT `USER runner`: the entrypoint starts as root only to align the
 # container's group with the host's Docker socket GID, then drops to `runner`

@@ -221,6 +221,35 @@ regardless. A step that runs `make -j$(nproc)` or `cargo test -j $(nproc)` will
 still fan out to the whole machine, so set `CARGO_BUILD_JOBS` or pass an
 explicit `-j` in those workflows.
 
+## Diagnosing a build that dies with no error
+
+A process killed by the kernel for using too much memory prints nothing. Worse,
+`sccache` turns the `SIGKILL` into a bare **exit code 2**, so cargo reports
+`process didn't exit successfully ... (exit status: 2)` with no diagnostic at
+all and the failure looks like a compiler bug.
+
+Each runner therefore samples its own cgroup for the life of every job
+(`MEM_SAMPLE=true`, every `MEM_SAMPLE_INTERVAL` seconds) and logs to
+`docker compose logs runner-N`:
+
+```
+[mem] 12:33:58Z usage 13GB = 81% of limit
+[mem]          11GB   rustc
+[mem] 12:34:03Z OOM KILL  1 process(es) killed by the kernel; current=2.1GB
+[mem] 12:34:03Z        largest processes at the previous sample:
+[mem]          14GB   rustc
+[mem] 12:34:08Z SUMMARY peak=16GB (100% of limit) oom_kills=1
+```
+
+The decisive field is `oom_kills` in the SUMMARY line, read from the cgroup's
+`memory.events`. Non-zero means the kernel killed something in that container,
+and a build step that failed without a diagnostic was almost certainly it.
+Usage lines appear only when a new band is crossed, so a job that stays well
+under its limit prints two lines total.
+
+The OOM victim is gone by the time the sampler polls, so the kill report shows
+the *previous* sample - that is the one that names what was actually large.
+
 ## Security
 
 - **Each `dind-N` is `privileged`.** Docker-in-Docker cannot create its
@@ -248,7 +277,7 @@ explicit `-j` in those workflows.
 | `Connection refused (os error 111)` reaching a service container on `localhost:<port>` | The runner is not sharing its daemon's netns - check `network_mode: "service:dind-N"` |
 | `openssl-sys` / `pkg-config` build failure | A missing `-dev` package; see *Preinstalled build dependencies* |
 | `psql: command not found` (or any tool, exit 127) | The image lacks a CLI the workflow assumes; hosted images ship far more |
-| A compiler exits non-zero with **no error diagnostic**, often with `sccache: the server looks like it shut down unexpectedly` | Out of memory - processes killed by the kernel, not a code failure. Check `dmesg -T \| grep -i oom` and see *Resource limits* |
+| A compiler exits non-zero with **no error diagnostic** (`exit status: 2` through sccache) | Check the `[mem]` SUMMARY line in `docker compose logs runner-N`: a non-zero `oom_kills` means the kernel killed it. See *Diagnosing a build that dies with no error* |
 | `git worktree` / `index.lock`: `Read-only file system` | A job mounts the workspace `:ro` but the tool needs to write to `.git` (e.g. semgrep `--baseline-commit`) |
 | After a host reboot, runners restart-loop until you delete them in the GitHub web UI | A stale `.runner` from the unclean shutdown; see *Surviving an unclean shutdown* |
 | `docker compose down` hangs | A container is ignoring `SIGTERM` and waiting out `stop_grace_period` (5m for runners, 30s elsewhere) |
