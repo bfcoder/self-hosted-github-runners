@@ -273,7 +273,25 @@ Database clients for talking to `services:` containers:
 
 Scripting:
 
-`python3` (3.12) `python3-pip` `python3-venv`
+`python3` (3.12) `python3-pip` `python3-venv` `python-is-python3`
+
+Tools hosted images ship that workflows assume without declaring:
+
+`zstd` `rsync` `openssh-client` `git-lfs` `shellcheck` `sqlite3` `file` `tree`
+`time` `locales` `libyaml-dev` `autoconf` `automake` `libtool` `m4`
+`p7zip-full` `brotli` `lz4` `pigz` `parallel` `dnsutils` `iputils-ping`
+`iproute2` `net-tools` `fakeroot` `gnupg2` `acl`
+
+`zstd` matters most: `actions/cache` and `Swatinem/rust-cache` compress with it
+when present and silently fall back to gzip when absent. `git-lfs` is the other
+silent one - without it checkout produces pointer files, not content. The
+network tools are there so a job that cannot reach a service container can be
+debugged from inside the runner.
+
+This list is a *subset* of the hosted image, chosen against what this CI
+actually does. To re-derive it after a runner-image release, diff
+`actions/runner-images` `images/ubuntu/Ubuntu2404-Readme.md` ("Installed apt
+packages") against `dpkg-query -W -f='${Package}\n'` in this image.
 
 Ubuntu 24.04 marks the system interpreter externally managed, so a bare
 `pip3 install X` fails with `error: externally-managed-environment`. Use a
@@ -307,6 +325,9 @@ pkg-config command could not be found", or a missing header, the fix is another
   and are then cached in `/opt/hostedtoolcache`, which persists.
 - **Fewer preinstalled system packages** than a hosted image, despite the list
   above. Expect to add a `-dev` package now and then.
+- **`ubuntu-latest` moves to Ubuntu 26.04 in November 2026.** This image is
+  pinned to 24.04, so after that the hosted and self-hosted runners drift on
+  glibc, OpenSSL and the psql client. Track it deliberately or stay pinned.
 - **`cargo install` compiles from source every time it runs.** `~/.cargo` lives
   in the container layer, so it survives a restart but not a rebuild. Prefer a
   prebuilt binary (`taiki-e/install-action`, `cargo-binstall`) or bake the tool

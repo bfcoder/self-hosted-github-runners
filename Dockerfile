@@ -41,6 +41,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
+# Tools a hosted runner image ships that workflows assume without declaring.
+#   zstd             actions/cache and rust-cache compress with it when present
+#                    and silently fall back to gzip when absent
+#   openssh-client   git-over-ssh deps, submodules, deploy steps
+#   git-lfs          without it checkout yields pointer files, not content
+#   shellcheck       used by the ShellCheck job
+#   python-is-python3  node-gyp and many scripts invoke bare `python`
+#   net tools        so a failure to reach a service container is debuggable
+#                    from inside the runner
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        zstd rsync openssh-client git-lfs shellcheck sqlite3 \
+        file tree time locales python-is-python3 libyaml-dev \
+        autoconf automake libtool m4 \
+        p7zip-full brotli lz4 pigz parallel \
+        dnsutils iputils-ping iproute2 net-tools \
+        fakeroot gnupg2 acl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Docker CLI + compose plugin, so jobs can talk to a mounted Docker socket.
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
