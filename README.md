@@ -55,7 +55,7 @@ jobs:
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | Runner image: Ubuntu 24.04, `actions/runner`, Docker CLI, hosted-style layout |
+| `Dockerfile` | Runner image: Ubuntu 26.04, `actions/runner`, Docker CLI, hosted-style layout |
 | `entrypoint.sh` | Registers the runner, waits for its daemon, drops root, deregisters on exit |
 | `docker-compose.yml` | Five `runner-N` + `dind-N` pairs, plus the weekly prune |
 | `cleanup.sh` | Age-based prune of tool caches and each daemon's image store |
@@ -290,26 +290,38 @@ and native gems fail at *build* time without them:
 
 `build-essential` `pkg-config` `cmake` `clang` `llvm` `libclang-dev`
 `libssl-dev` `libsqlite3-dev` `libpq-dev` `zlib1g-dev` `libxml2-dev`
-`libxmlsec1-dev` `libxmlsec1-openssl` `libxslt1-dev`
+`libxmlsec1-dev` `libxmlsec1-openssl1` `libxslt1-dev`
 
 `libclang-dev` is there for `bindgen`, which needs `libclang.so` at build time,
-and `libxmlsec1-openssl` because `pkg-config --libs xmlsec1` emits
+and `libxmlsec1-openssl1` because `pkg-config --libs xmlsec1` emits
 `-lxmlsec1-openssl` - the headers alone do not link.
 
 Database clients for talking to `services:` containers:
 
-`postgresql-client` (psql 16) `redis-tools` (redis-cli 7)
+`postgresql-client` (psql 18) `redis-tools` (redis-cli 8)
 
 Scripting:
 
-`python3` (3.12) `python3-pip` `python3-venv` `python-is-python3`
+`python3` (3.14) `python3-pip` `python3-venv` `python-is-python3`
 
-Tools hosted images ship that workflows assume without declaring:
+Everything in the hosted image's "Installed apt packages" table, because
+workflows assume these without declaring them:
 
-`zstd` `rsync` `openssh-client` `git-lfs` `shellcheck` `sqlite3` `file` `tree`
-`time` `locales` `libyaml-dev` `autoconf` `automake` `libtool` `m4`
-`p7zip-full` `brotli` `lz4` `pigz` `parallel` `dnsutils` `iputils-ping`
-`iproute2` `net-tools` `fakeroot` `gnupg2` `acl`
+`7zip` `7zip-rar` `acl` `aria2` `autoconf` `automake` `bind9-dnsutils`
+`binutils` `bison` `brotli` `bzip2` `coreutils` `curl` `dbus` `dpkg` `dpkg-dev`
+`fakeroot` `file` `findutils` `flex` `fonts-noto-color-emoji` `ftp` `g++` `gcc`
+`gnupg2` `iproute2` `iputils-ping` `jq` `libicu-dev` `libnss3-tools`
+`libsqlite3-dev` `libssl-dev` `libtool` `libyaml-dev` `locales` `lz4` `m4`
+`make` `net-tools` `netcat-openbsd` `openssh-client` `parallel` `patchelf`
+`pigz` `pkg-config` `python-is-python3` `rpm` `rsync` `shellcheck` `sqlite3`
+`ssh` `sshpass` `sudo` `swig` `tar` `telnet` `texinfo` `time` `tk` `tree`
+`tzdata` `unzip` `upx-ucl` `wget` `xvfb` `xz-utils` `zip` `zsync`, plus `zstd`
+and `git-lfs`, which the hosted image installs from upstream.
+
+The hosted readme names some packages by what they provide: its `netcat` is
+`netcat-openbsd` and its `upx` is `upx-ucl`. Two entries are left out because
+they do nothing in a container: `pollinate` seeds entropy at VM boot, and
+`systemd-coredump` needs systemd as PID 1.
 
 `zstd` matters most: `actions/cache` and `Swatinem/rust-cache` compress with it
 when present and silently fall back to gzip when absent. `git-lfs` is the other
@@ -317,19 +329,19 @@ silent one - without it checkout produces pointer files, not content. The
 network tools are there so a job that cannot reach a service container can be
 debugged from inside the runner.
 
-This list is a *subset* of the hosted image, chosen against what this CI
-actually does. To re-derive it after a runner-image release, diff
-`actions/runner-images` `images/ubuntu/Ubuntu2404-Readme.md` ("Installed apt
-packages") against `dpkg-query -W -f='${Package}\n'` in this image.
+To re-sync after a runner-image release, diff the "Installed apt packages" table
+in `actions/runner-images` `images/ubuntu/Ubuntu2604-Readme.md` against
+`dpkg-query -W -f='${Package}\n'` in this image. Only `pollinate` and
+`systemd-coredump` should be missing.
 
-Ubuntu 24.04 marks the system interpreter externally managed, so a bare
+Ubuntu marks the system interpreter externally managed, so a bare
 `pip3 install X` fails with `error: externally-managed-environment`. Use a
 virtualenv, `pip install --user`, or `setup-python`, which brings its own
 interpreter into `/opt/hostedtoolcache`.
 
-`psql` comes from Ubuntu 24.04, so it is version 16. Talking to a newer server
+`psql` comes from Ubuntu 26.04, so it is version 18. Talking to a newer server
 is fine for `psql` itself, but `pg_dump` refuses a server newer than itself. If
-your `services:` Postgres is 17+ and you dump from it, add the PGDG apt repo to
+your `services:` Postgres is 19+ and you dump from it, add the PGDG apt repo to
 the `Dockerfile` and install the matching `postgresql-client-NN`.
 
 A cheap way to fail fast with a clear message, rather than deep inside a cargo
@@ -352,11 +364,20 @@ pkg-config command could not be found", or a missing header, the fix is another
 - **No preinstalled toolchains.** Hosted images ship dozens of language
   versions; here `setup-node`, `setup-python` and friends download on first use
   and are then cached in `/opt/hostedtoolcache`, which persists.
-- **Fewer preinstalled system packages** than a hosted image, despite the list
-  above. Expect to add a `-dev` package now and then.
+- **Only the hosted apt packages, not the rest of the hosted image.** The
+  hosted image also carries language runtimes (Java, .NET, Go, Rust, PHP,
+  Haskell, Kotlin), cloud CLIs (`gh`, `aws`, `az`, `gcloud`), Kubernetes tools,
+  browsers and the Android SDK. Workflows that assume one of those need a
+  `setup-*` action or an addition to the `Dockerfile`.
+- **Distro versions, not the hosted image's.** Where the hosted image installs
+  a tool from upstream, this image gets Ubuntu's build: git 2.53 and CMake 4.2
+  instead of the hosted 2.55 and 4.4, for example.
+- **uutils coreutils.** Ubuntu 26.04 replaces GNU coreutils with the Rust
+  rewrite. The hosted image does too, but a script that worked on 24.04 can
+  still trip over a flag uutils does not implement.
 - **`ubuntu-latest` moves to Ubuntu 26.04 in November 2026.** This image is
-  pinned to 24.04, so after that the hosted and self-hosted runners drift on
-  glibc, OpenSSL and the psql client. Track it deliberately or stay pinned.
+  already on 26.04, so until then it matches `ubuntu-26.04`, not
+  `ubuntu-latest`.
 - **`cargo install` compiles from source every time it runs.** `~/.cargo` lives
   in the container layer, so it survives a restart but not a rebuild. Prefer a
   prebuilt binary (`taiki-e/install-action`, `cargo-binstall`) or bake the tool
