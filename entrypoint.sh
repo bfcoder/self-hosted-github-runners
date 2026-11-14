@@ -196,7 +196,9 @@ if [[ -z "${RUNNER_TOKEN:-}" ]]; then
   if [[ "${HTTP_CODE}" != "201" ]]; then
     echo "ERROR: GitHub API returned HTTP ${HTTP_CODE} for ${SCOPE}" >&2
     echo "       $(jq -r '.message // .' <<<"${HTTP_BODY}" 2>/dev/null || echo "${HTTP_BODY}")" >&2
-    echo "       Check GITHUB_URL and that GITHUB_PAT has admin:org (org) or repo (repo) scope." >&2
+    echo "       Check GITHUB_URL and that GITHUB_PAT can manage runners there:" >&2
+    echo "       classic admin:org (org) or repo (repo); fine-grained, owned by that" >&2
+    echo "       org or user, with Self-hosted runners (org) or Administration (repo) R/W." >&2
     exit 1
   fi
 
@@ -209,11 +211,13 @@ CONFIG_ARGS=(
   --token "${RUNNER_TOKEN}"
   --name "${RUNNER_NAME}"
   --labels "${RUNNER_LABELS}"
-  --runnergroup "${RUNNER_GROUP}"
   --work "${RUNNER_WORKDIR}"
   --unattended
   --replace
 )
+# Runner groups exist only at org level. Skipping the flag for a repo target
+# lets one RUNNER_GROUP setting serve a stack that mixes org and repo runners.
+[[ "${SCOPE}" == orgs/* ]] && CONFIG_ARGS+=(--runnergroup "${RUNNER_GROUP}")
 [[ "${RUNNER_EPHEMERAL}" == "true" ]] && CONFIG_ARGS+=(--ephemeral)
 
 echo "Configuring runner '${RUNNER_NAME}' against ${GITHUB_URL}"

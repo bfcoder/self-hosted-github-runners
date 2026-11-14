@@ -28,7 +28,8 @@ actions work.
 - Docker Engine with the Compose v2 plugin (`docker compose version`)
 - A GitHub PAT that can register runners:
   - **Classic:** `admin:org` for org-level runners, `repo` for repo-level
-  - **Fine-grained:** *Self-hosted runners* → Read and write
+  - **Fine-grained** (resource owner = the org or user): *Self-hosted runners*
+    → Read and write for an org, *Administration* → Read and write for a repo
 - The host must allow `privileged` containers (required by Docker-in-Docker)
 - Roughly 1.5–2 GB of disk per runner once caches warm up
 
@@ -68,9 +69,10 @@ jobs:
 |---|---|---|
 | `GITHUB_URL` | — | `https://github.com/ORG` or `https://github.com/ORG/REPO` |
 | `GITHUB_PAT` | — | Used to mint a fresh registration token on every container start |
+| `GITHUB_URL_N` / `GITHUB_PAT_N` | *(unset)* | Per-runner target for `runner-N`; see *Serving an org and a personal repo* |
 | `RUNNER_NAME_PREFIX` | `docker-runner` | Runners are named `<prefix>-1`, `<prefix>-2`, … |
 | `RUNNER_LABELS` | `self-hosted,linux,x64,docker` | Must match `runs-on:` |
-| `RUNNER_GROUP` | `Default` | Org runner groups only |
+| `RUNNER_GROUP` | `Default` | Org runner groups only; not passed for repo targets |
 | `RUNNER_EPHEMERAL` | `true` | One job per container. `false` = long-lived runner |
 | `FRESH_WORKSPACE` | `true` | Wipe the work tree each start. `false` = incremental checkout, faster but less faithful |
 | `DIND_IMAGE` | `docker:28-dind` | Pinned deliberately; dind major versions change defaults |
@@ -84,6 +86,44 @@ jobs:
 `GITHUB_PAT` mints a registration token at each start rather than using a
 static one, because registration tokens expire after about an hour and would
 not survive a restart.
+
+## Serving an org and a personal repo
+
+A runner registers to exactly one org or one repo. Org runners can't pick up
+jobs from a repo under your personal account, and personal accounts have no
+account-wide runners, so a private personal repo needs runners registered to
+that repo. Split the five runners between targets with per-runner overrides:
+
+```bash
+# .env
+GITHUB_URL=https://github.com/my-org        # runners 1-3 (the default)
+GITHUB_PAT=github_pat_org...
+
+GITHUB_URL_4=https://github.com/me/my-repo  # runners 4-5
+GITHUB_PAT_4=github_pat_me...
+GITHUB_URL_5=https://github.com/me/my-repo
+GITHUB_PAT_5=github_pat_me...
+```
+
+Then `docker compose up -d`. Any `runner-N` without a `GITHUB_URL_N` uses
+`GITHUB_URL`.
+
+- **PATs.** A fine-grained PAT belongs to one resource owner, so the org and
+  your personal repo need one each (*Self-hosted runners* R/W for the org,
+  *Administration* R/W on the repo). A classic PAT with `admin:org` and `repo`
+  works for both and can go in `GITHUB_PAT` alone.
+- **Runner names** only need to be unique within a target, so both sides keep
+  the `docker-runner-N` names.
+- **Labels and `runs-on:`** are unchanged: each repo only ever sees the runners
+  registered to it (or its org).
+- **Isolation.** Each runner has its own daemon and volumes, so org jobs and
+  personal jobs never share a work tree, tool cache or image store.
+- **Moving a runner** to a different target: change `.env` and run
+  `docker compose up -d`. The recreate sends `SIGTERM`, which deregisters it
+  from the old target before it registers with the new one.
+- **More runners for one side.** To keep all five on the org and add more for
+  the repo, add a `runner-6` (see *Add another runner*) and set
+  `GITHUB_URL_6` / `GITHUB_PAT_6`. Mind `RUNNER_MEMORY` × runner count.
 
 ## How a runner starts
 
@@ -157,7 +197,8 @@ docker compose logs -f cache-cleanup     # prune activity
 **Add another runner** (the stack ships with five, `runner-1` … `runner-5`)
 
 1. Copy the `dind-5` and `runner-5` service blocks, bumping every `5` to `6` -
-   including `network_mode: "service:dind-6"` and `RUNNER_NAME`.
+   including `network_mode: "service:dind-6"`, `RUNNER_NAME`, and the
+   `GITHUB_URL_6` / `GITHUB_PAT_6` overrides.
 2. Add `work-6`, `tools-6`, `externals-6`, `dind-data-6` to the `volumes:` block.
 3. In `cache-cleanup`: add `tools-6:/caches/6` to its volumes and `/caches/6` to
    `TOOL_CACHE_DIRS`.
@@ -270,6 +311,7 @@ the *previous* sample - that is the one that names what was actually large.
 |---|---|
 | `HTTP 401 … Bad credentials` | `GITHUB_PAT` wrong or missing the scope above |
 | `HTTP 404` on registration | `GITHUB_URL` points at an org that doesn't exist, or a repo PAT against an org URL |
+| `HTTP 403`/`404` only on runners pointed at your personal repo | That runner is using the org's fine-grained PAT; set `GITHUB_PAT_N` to one owned by your account with *Administration* R/W on the repo |
 | Containers restart in a loop with no logs | Something is failing in the root phase — trace it with `docker compose run --rm --entrypoint bash runner-1 -x /usr/local/bin/entrypoint.sh` |
 | `EACCES … '/root/.gitconfig'` | `HOME` is not being exported before the privilege drop |
 | A job's `-v "$GITHUB_WORKSPACE:/src"` sees an empty directory | The path is not shared with the daemon at the same path. Green checks here are *false passes* — a scanner reports zero findings on zero files |
