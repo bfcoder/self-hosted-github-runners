@@ -1,4 +1,7 @@
-FROM ubuntu:26.04
+# Pinned to 24.04, not 26.04: setup-ruby (and other setup-* actions) pick their
+# prebuilt binary from this image's /etc/os-release, and the ubuntu-26.04 builds
+# require an x86-64-v3 CPU (AVX2). The 24.04 builds run on x86-64-v2 hosts.
+FROM ubuntu:24.04
 
 # Set at build time: docker build --build-arg RUNNER_VERSION=2.328.0 ...
 # Leave empty to resolve the latest release from the GitHub API at build time.
@@ -14,7 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl wget git jq unzip zip tar gzip \
         sudo gnupg lsb-release build-essential \
-        libicu78 liblttng-ust1t64 libkrb5-3 zlib1g libssl3t64 \
+        libicu74 liblttng-ust1 libkrb5-3 zlib1g libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Native build dependencies. Hosted runner images ship these, and -sys crates
@@ -24,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config libssl-dev \
         cmake clang llvm libclang-dev \
         libsqlite3-dev libpq-dev zlib1g-dev \
-        libxml2-dev libxmlsec1-dev libxmlsec1-openssl1 libxslt1-dev \
+        libxml2-dev libxmlsec1-dev libxmlsec1-openssl libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Database clients. Hosted images ship these; workflows use them to talk to
@@ -42,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # The hosted image's "Installed apt packages" list, from actions/runner-images
-# images/ubuntu/Ubuntu2604-Readme.md. Workflows assume these without declaring
+# images/ubuntu/Ubuntu2404-Readme.md. Workflows assume these without declaring
 # them. A few names differ from the readme because the readme lists what the
 # package provides: netcat is netcat-openbsd, upx is upx-ucl. zstd and git-lfs
 # are not in the readme's apt table (it lists them under Tools) but matter:
@@ -55,19 +58,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   net tools        so a failure to reach a service container is debuggable
 #                    from inside the runner
 #   xvfb             headless browser and GUI tests
-# Left out on purpose: pollinate (seeds entropy at VM boot) and
-# systemd-coredump (needs systemd as PID 1). Neither does anything in a
-# container.
+# Left out on purpose: pollinate (seeds entropy at VM boot), haveged (an
+# entropy daemon nothing starts) and systemd-coredump (needs systemd as PID 1).
+# None of them does anything in a container.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        7zip 7zip-rar acl aria2 autoconf automake bind9-dnsutils binutils \
-        bison brotli bzip2 coreutils curl dbus dpkg dpkg-dev fakeroot file \
-        findutils flex fonts-noto-color-emoji ftp g++ gcc gnupg2 iproute2 \
-        iputils-ping jq libicu-dev libnss3-tools libsqlite3-dev libssl-dev \
-        libtool libyaml-dev locales lz4 m4 make net-tools netcat-openbsd \
-        openssh-client parallel patchelf pigz pkg-config python-is-python3 \
-        rpm rsync shellcheck sqlite3 ssh sshpass sudo swig tar telnet \
-        texinfo time tk tree tzdata unzip upx-ucl wget xvfb xz-utils zip \
-        zsync zstd git-lfs \
+        acl aria2 autoconf automake binutils bison brotli bzip2 coreutils \
+        curl dbus dnsutils dpkg dpkg-dev fakeroot file findutils flex \
+        fonts-noto-color-emoji ftp g++ gcc gnupg2 iproute2 iputils-ping jq \
+        libicu-dev libnss3-tools libsqlite3-dev libssl-dev libtool \
+        libyaml-dev locales lz4 m4 make mediainfo mercurial net-tools \
+        netcat-openbsd openssh-client p7zip-full p7zip-rar parallel patchelf \
+        pigz pkg-config python-is-python3 rpm rsync shellcheck sphinxsearch \
+        sqlite3 ssh sshpass sudo swig tar telnet texinfo time tk tree tzdata \
+        unzip upx-ucl wget xvfb xz-utils zip zsync zstd git-lfs \
     && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI + compose plugin, so jobs can talk to a mounted Docker socket.
@@ -81,7 +84,7 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # The runner refuses to run as root, so give it its own user.
-# UID 1001 avoids clashing with ubuntu:26.04's built-in "ubuntu" user (1000).
+# UID 1001 avoids clashing with ubuntu:24.04's built-in "ubuntu" user (1000).
 # Layout mirrors a GitHub-hosted runner: HOME=/home/runner, work tree at
 # /home/runner/work, tool cache at /opt/hostedtoolcache, uid 1001.
 RUN useradd -m -u 1001 -s /bin/bash runner \
