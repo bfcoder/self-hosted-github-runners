@@ -56,7 +56,7 @@ jobs:
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | Runner image: Ubuntu 24.04, `actions/runner`, Docker CLI, hosted-style layout |
+| `Dockerfile` | Runner image: Ubuntu 24.04, `actions/runner`, Docker CLI, Chrome, hosted-style layout |
 | `entrypoint.sh` | Registers the runner, waits for its daemon, drops root, deregisters on exit |
 | `docker-compose.yml` | Five `runner-N` + `dind-N` pairs, plus the weekly prune |
 | `cleanup.sh` | Age-based prune of tool caches and each daemon's image store |
@@ -318,6 +318,7 @@ the *previous* sample - that is the one that names what was actually large.
 | `no Docker daemon at tcp://localhost:2375 after 60s` | `dind-N` unhealthy: `docker compose logs dind-N`. Usually the host disallows `privileged` |
 | `Connection refused (os error 111)` reaching a service container on `localhost:<port>` | The runner is not sharing its daemon's netns - check `network_mode: "service:dind-N"` |
 | `openssl-sys` / `pkg-config` build failure | A missing `-dev` package; see *Preinstalled build dependencies* |
+| `SessionNotCreatedError: … Chrome instance exited` | Selenium fell back to Chrome for Testing, which lacks system libraries. The image must have `google-chrome-stable`; rebuild with `docker compose build`. In a container Chrome also needs `--no-sandbox` and `--disable-dev-shm-usage` |
 | `psql: command not found` (or any tool, exit 127) | The image lacks a CLI the workflow assumes; hosted images ship far more |
 | A compiler exits non-zero with **no error diagnostic** (`exit status: 2` through sccache) | Check the `[mem]` SUMMARY line in `docker compose logs runner-N`: a non-zero `oom_kills` means the kernel killed it. See *Diagnosing a build that dies with no error* |
 | `git worktree` / `index.lock`: `Read-only file system` | A job mounts the workspace `:ro` but the tool needs to write to `.git` (e.g. semgrep `--baseline-commit`) |
@@ -377,6 +378,17 @@ To re-sync after a runner-image release, diff the "Installed apt packages" table
 in `actions/runner-images` `images/ubuntu/Ubuntu2404-Readme.md` against
 `dpkg-query -W -f='${Package}\n'` in this image. Only `pollinate`, `haveged`
 and `systemd-coredump` should be missing.
+
+Browsers, for system specs and other Selenium tests:
+
+`google-chrome-stable` from Google's apt repo, and a matching `chromedriver` at
+`/usr/local/share/chromedriver-linux64` (on `PATH`, and in `CHROMEWEBDRIVER`, as
+on hosted images). Without them Selenium Manager downloads Chrome for Testing,
+which has none of the shared libraries it needs and dies with
+`session not created: Chrome instance exited`. The apt package brings those
+libraries. Containers block the user namespaces Chrome's sandbox uses and keep
+`/dev/shm` at 64 MB, so pass `--no-sandbox` and `--disable-dev-shm-usage` when
+`CI` is set. Google publishes no Linux arm64 Chrome, so arm64 builds skip it.
 
 Ubuntu marks the system interpreter externally managed, so a bare
 `pip3 install X` fails with `error: externally-managed-environment`. Use a

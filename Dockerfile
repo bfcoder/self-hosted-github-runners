@@ -73,6 +73,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         unzip upx-ucl wget xvfb xz-utils zip zsync zstd git-lfs \
     && rm -rf /var/lib/apt/lists/*
 
+# Google Chrome + a matching chromedriver, as on hosted images. Without them
+# Selenium Manager downloads Chrome for Testing, which ships no system libraries
+# and exits at launch ("session not created: Chrome instance exited") because
+# libgbm, libasound and friends are absent. The apt package pulls those in.
+# chromedriver lands where hosted images put it, with CHROMEWEBDRIVER pointing
+# at it, and is on PATH so Selenium needs no network to find a driver.
+# Google ships no Linux arm64 Chrome, so arm64 builds skip this layer.
+ENV CHROMEWEBDRIVER=/usr/local/share/chromedriver-linux64
+RUN set -eux; \
+    if [ "${TARGETARCH}" != "amd64" ]; then echo "skipping Chrome on ${TARGETARCH}"; exit 0; fi; \
+    install -m 0755 -d /etc/apt/keyrings; \
+    curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+        | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg; \
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
+        > /etc/apt/sources.list.d/google-chrome.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends google-chrome-stable; \
+    rm -rf /var/lib/apt/lists/*; \
+    BUILD="$(google-chrome --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"; \
+    DRIVER_VERSION="$(curl -fsSL "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_${BUILD}")"; \
+    curl -fsSL -o /tmp/chromedriver.zip \
+        "https://storage.googleapis.com/chrome-for-testing-public/${DRIVER_VERSION}/linux64/chromedriver-linux64.zip"; \
+    unzip -q /tmp/chromedriver.zip -d /usr/local/share; \
+    rm /tmp/chromedriver.zip; \
+    chmod 0755 /usr/local/share/chromedriver-linux64/chromedriver; \
+    ln -s /usr/local/share/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
+    google-chrome --version; chromedriver --version
+
 # Docker CLI + compose plugin, so jobs can talk to a mounted Docker socket.
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
